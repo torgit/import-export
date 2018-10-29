@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { IExporter } from './interfaces/exporter-service.interface';
-import { XlsxService } from 'utils/xlsx.service';
+import { XlsxService } from '../utils/xlsx.service';
 
 @Injectable()
 export class JsonExporterService implements IExporter<Buffer, Object> {

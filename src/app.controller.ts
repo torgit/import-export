@@ -1,4 +1,4 @@
-import { Controller, Post, Inject, Body, FileInterceptor, UseInterceptors, UploadedFile } from '@nestjs/common';
+import { Controller, Post, Inject, Body, FileInterceptor, UseInterceptors, UploadedFile, NotFoundException, BadRequestException } from '@nestjs/common';
 import { IExporter } from './exporter/interfaces/exporter-service.interface';
 import * as XLSX from 'xlsx';
 
@@ -18,6 +18,9 @@ export class AppController {
   @Post('json')
   @UseInterceptors(FileInterceptor('file'))
   async exportToJson(@UploadedFile() file): Promise<Object> {
+    if (!file) {
+      throw new BadRequestException('file is required');
+    }
     return await this.jsonExporterService.export(file.buffer);
   }
 }

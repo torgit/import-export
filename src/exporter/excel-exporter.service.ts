@@ -37,16 +37,15 @@ export class ExcelExporterService implements IExporter<Object, XLSX.WorkBook> {
     private addPropertiesToWorksheet (obj: Object, ws: XLSX.WorkSheet, labels: LabelMap, row: number, parentName?: string, latestLabelAddr: string = 'A1'): number {
         for (var key in obj) {
             const labelName = parentName ? `${parentName}.${key}` : key;
+            const value = obj[key];
+            if (!labels[labelName]) {
+                this.xlsxService.addNewLabel(ws, labelName);
+                latestLabelAddr = ws["!ref"];
+                labels[labelName] = latestLabelAddr;
+            }
+            const label = labels[labelName];
 
             if (obj.hasOwnProperty(key) && !(obj[key] instanceof Array)) {
-                const value = obj[key];
-                if (!labels[labelName]) {
-                    this.xlsxService.addNewLabel(ws, labelName);
-                    latestLabelAddr = ws["!ref"];
-                    labels[labelName] = latestLabelAddr;
-                }
-                const label = labels[labelName];
-
                 switch(typeof value) {
                     case "object": {
                         this.addPropertiesToWorksheet(value, ws, labels, row, labelName, latestLabelAddr);
@@ -57,16 +56,20 @@ export class ExcelExporterService implements IExporter<Object, XLSX.WorkBook> {
                         break;
                     }
                 }
-            } else if (obj.hasOwnProperty(key)) {
+            } else if (obj.hasOwnProperty(key) && (obj[key] instanceof Array)) {
                 const array: Array<Object> = obj[key];
-                array.map(a => {
-                    this.addPropertiesToWorksheet(a, ws, labels, row, labelName, latestLabelAddr);
-                    row += 1;
-                });
-                row -= 1;
+                if (array.length > 0) {
+                    array.forEach(a => {
+                        if (a) {
+                            this.addPropertiesToWorksheet(a, ws, labels, row, labelName, latestLabelAddr);
+                            row++;
+                        }
+                    });
+                    row--;
+                }
             }
         }
-        row += 1;
+        row++;
         return row;
     }
 }

@@ -85,25 +85,97 @@ export class XlsxService {
         var results = [];
         for (var r = range.s.r + 1; r <= range.e.r; r++) {
             var result = {};
+            var objectSize = 0;
+            var objectKeys = [];
             for (var c = range.s.c; c <= range.e.c; c++) {
                 const obj = {};
                 const keyAddr = XLSX.utils.encode_cell({c, r: 0});
                 const valueAddr = XLSX.utils.encode_cell({c, r});
                 const key: string = ws[keyAddr].w;
-                const realKey = key.split('.')
-                // console.log(realKey)
-                realKey.forEach(k => {
-                    // result[k] =
-                })
+                const nestedKeys = key.split('.')
                 const value = ws[valueAddr] ? ws[valueAddr].v : undefined;
-                // console.log(value)
-                obj[key] = value;
-                Object.assign(result, obj);
+                const nestedObj = nestedKeys.length > 1 ? this.getNestedObject(nestedKeys, value) : undefined;
+
+                if (value) {
+                    objectSize++;
+                }
+                if (value && nestedObj) {
+                    objectKeys = [...objectKeys, ...nestedKeys];
+                }
+
+                if (nestedObj) {
+                    result = this.mergeNestedObjects(result, nestedObj);
+                } else {
+                    obj[key] = value;
+                    result = {...result, ...obj};
+                    Object.assign(result, obj);
+                }
             }
-            // console.log(result);
+
+            // Check lone attribute (nested attribute)
+            if (objectSize === 1) {
+                const latestResult = results.pop();
+                result = this.mergeNestedArrays(latestResult, result);
+            }
             results.push(result);
         }
-        return results;
-        // return XLSX.utils.sheet_to_json(ws);
+        return results.reduce((r1, r2) => {
+            const keyR1 = Object.keys(r1);
+            const keyR2 = Object.keys(r1);
+            if (keyR1.length === 1 && keyR2.length === 1 && keyR1[0] === keyR2[0]) {
+                return this.mergeNestedArrays(r1, r2)
+            } else {
+                if (r1 instanceof Array) {
+                    return [...r1, r2];
+                }
+                return [r1, r2];
+            }
+        });
+    }
+
+    private getNestedObject(nestedKeys: string[], value: any, obj: Object = {}): Object {
+        const [head, ...tail] = nestedKeys;
+        if (tail.length > 0) {
+            obj[head] = this.getNestedObject(tail, value);
+            return obj;
+        }
+        else {
+            obj[head] = value;
+            return obj;
+        } 
+    }
+
+    private mergeNestedObjects(mainObj: Object, nestedObj: Object): Object {
+        for (var k in nestedObj) {
+            if (nestedObj.hasOwnProperty(k) && nestedObj[k] && (nestedObj[k] instanceof Object)) {
+                mainObj[k] = mainObj[k]
+                ? this.mergeNestedObjects(mainObj[k], nestedObj[k])
+                : nestedObj[k];
+            }
+            else if (nestedObj.hasOwnProperty(k) && nestedObj[k]) {
+                const mainVal = mainObj[k];
+                const mergedVal = mainVal ? [mainVal, nestedObj[k]] : nestedObj[k];
+                mainObj[k] = mergedVal;
+            }
+        }
+        return mainObj;
+    }
+
+    private mergeNestedArrays(mainObj: Object, nestedObj: Object): Object {
+        for (var k in nestedObj) {
+            if (nestedObj.hasOwnProperty(k) && nestedObj[k] && (nestedObj[k] instanceof Object)) {
+                mainObj[k] = mainObj[k]
+                ? mainObj[k] instanceof Array
+                    ? [...mainObj[k], nestedObj[k]]
+                    : [mainObj[k], nestedObj[k]]
+                : nestedObj[k];
+            }
+            else if (nestedObj.hasOwnProperty(k) && nestedObj[k]) {
+                const mainVal = mainObj[k];
+                const mergedVal = mainVal ? [mainVal, nestedObj[k]] : nestedObj[k];
+                mainObj[k] = mergedVal;
+            }
+        }
+        return mainObj;
     }
 }
