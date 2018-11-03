@@ -28,24 +28,27 @@ export class ExcelExporterService implements IExporter<Object, XLSX.WorkBook> {
 
     private addArrayToWorksheet(arr: Array<Object>, ws: XLSX.WorkSheet, labels: LabelMap, row: number, parentName?: string): number {
         return arr.map(a => {
-            const entries = this.addPropertiesToWorksheet(a, ws, labels, row, parentName);
-            row = entries;
+            row = this.addPropertiesToWorksheet(a, ws, labels, row, parentName);
             return row;
         }).reduce((a, b) => a + b);
     }
 
-    private addPropertiesToWorksheet (obj: Object, ws: XLSX.WorkSheet, labels: LabelMap, row: number, parentName?: string, latestLabelAddr: string = 'A1'): number {
+    private addPropertiesToWorksheet(
+        obj: Object, ws: XLSX.WorkSheet, labels: LabelMap, 
+        row: number, parentName?: string, latestLabelAddr: string = 'A1'
+    ): number {
+        var upperBound = row
+        var lowerBound = row
         for (var key in obj) {
-            const labelName = parentName ? `${parentName}.${key}` : key;
-            const value = obj[key];
-            if (!labels[labelName]) {
-                this.xlsxService.addNewLabel(ws, labelName);
-                latestLabelAddr = ws["!ref"];
-                labels[labelName] = latestLabelAddr;
-            }
-            const label = labels[labelName];
-
             if (obj.hasOwnProperty(key) && !(obj[key] instanceof Array)) {
+                const labelName = parentName ? `${parentName}.${key}` : key;
+                const value = obj[key];
+                if (!labels[labelName]) {
+                    this.xlsxService.addNewLabel(ws, labelName);
+                    latestLabelAddr = ws["!ref"];
+                    labels[labelName] = latestLabelAddr;
+                }
+                const label = labels[labelName];
                 switch(typeof value) {
                     case "object": {
                         this.addPropertiesToWorksheet(value, ws, labels, row, labelName, latestLabelAddr);
@@ -57,19 +60,35 @@ export class ExcelExporterService implements IExporter<Object, XLSX.WorkBook> {
                     }
                 }
             } else if (obj.hasOwnProperty(key) && (obj[key] instanceof Array)) {
+                const labelName = parentName ? `${parentName}.${key}_isArray` : `${key}_isArray`;
+                if (!labels[labelName]) {
+                    this.xlsxService.addNewLabel(ws, labelName);
+                    latestLabelAddr = ws["!ref"];
+                    labels[labelName] = latestLabelAddr;
+                }
+                const label = labels[labelName];
                 const array: Array<Object> = obj[key];
                 if (array.length > 0) {
+                    this.xlsxService.addNewEntry(ws, label, row, `[${array.length}]`);
+                    row += 1;
                     array.forEach(a => {
                         if (a) {
-                            this.addPropertiesToWorksheet(a, ws, labels, row, labelName, latestLabelAddr);
-                            row++;
+                            const entries = this.addPropertiesToWorksheet(a, ws, labels, row, labelName, latestLabelAddr);
+                            row = entries;
                         }
                     });
-                    row--;
                 }
+                if (row > lowerBound) {
+                    lowerBound = row
+                }
+                row = upperBound
             }
         }
-        row++;
+        if (row !== lowerBound) {
+            row = lowerBound
+        } else {
+            row++;
+        }
         return row;
     }
 }

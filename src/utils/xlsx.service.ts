@@ -1,8 +1,21 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import * as XLSX from 'xlsx';
+import { isNullOrUndefined } from 'util';
 
 export const primarySheet = 'sheet1';
 export enum CellType {Label, Data};
+
+const arrayRegex = /_isArray$/;
+const arrayParts = /isArray/;
+const arraySizeRegex = /\[([0-9]+)\]/;
+
+function isEmpty(obj) {
+    for(var key in obj) {
+        if(obj.hasOwnProperty(key))
+            return false;
+    }
+    return true;
+}
 
 @Injectable()
 export class XlsxService {
@@ -82,55 +95,88 @@ export class XlsxService {
         const firstSheetName = data.SheetNames[0];
         const ws = data.Sheets[firstSheetName];
         const range = XLSX.utils.decode_range(ws['!ref']);
-        var results = [];
-        for (var r = range.s.r + 1; r <= range.e.r; r++) {
-            var result = {};
-            var objectSize = 0;
-            var objectKeys = [];
-            for (var c = range.s.c; c <= range.e.c; c++) {
-                const obj = {};
-                const keyAddr = XLSX.utils.encode_cell({c, r: 0});
-                const valueAddr = XLSX.utils.encode_cell({c, r});
-                const key: string = ws[keyAddr].w;
-                const nestedKeys = key.split('.')
-                const value = ws[valueAddr] ? ws[valueAddr].v : undefined;
-                const nestedObj = nestedKeys.length > 1 ? this.getNestedObject(nestedKeys, value) : undefined;
+        const json = this.getJSON(ws, range.s.r + 1, range.s.c);
+        return json;
+        // return this.flattenArray(json);
 
+    }
+    
+    private getJSON(ws: XLSX.WorkSheet, fromRow: number, fromCol: number, arraySize?: number, parentName?: string): any[] {
+        const range = XLSX.utils.decode_range(ws['!ref']);
+        const arrayName = fromCol > 0
+        ? this.removeArrIndicator(ws[XLSX.utils.encode_cell({c: fromCol - 1, r: 0})].w)
+        : undefined;
+
+        var elems: any[] = [];
+        for (var row = fromRow; row <= range.e.r; row++) {
+            var elem = {};
+            for (var col = fromCol; col <= range.e.c; col++) {
+                const keyAddr = XLSX.utils.encode_cell({c: col, r: 0});
+                const valueAddr = XLSX.utils.encode_cell({c: col, r: row});
+                var key: string = ws[keyAddr].w;
+                const value = ws[valueAddr] ? ws[valueAddr].v : undefined;
                 if (value) {
-                    objectSize++;
+                    ws[valueAddr].v = undefined;
                 }
-                if (value && nestedObj) {
-                    objectKeys = [...objectKeys, ...nestedKeys];
+                const isArray = !isNullOrUndefined(arrayRegex.exec(key));
+                const isArrayParts = !isNullOrUndefined(arrayParts.exec(key));
+                const hasArraySize = !isNullOrUndefined(arraySizeRegex.exec(value));
+
+                key = this.removeArrIndicator(key);
+                // if (isArrayParts) {
+                //     parentName = arrayName;
+                // }
+                //Array's attributes ended
+                if (arrayName && !key.includes(arrayName)) {
+                    col = range.e.c + 1;
                 }
+                const nestedKeys = key.split('.');
+
+                const nestedObj = nestedKeys.length > 1 && !isArray && value
+                    ? this.getNestedObject(nestedKeys, value) : undefined;
 
                 if (nestedObj) {
-                    result = this.mergeNestedObjects(result, nestedObj);
+                    elem = this.mergeNestedObjects(elem, nestedObj);
+                } else if (isArray && hasArraySize) {
+                    const size = +arraySizeRegex.exec(value)[1];
+                    const array = this.getJSON(ws, row + 1, col + 1, size, arrayName);
+                    const flattened = this.flattenArray(array);
+                    const merged = this.mergeNestedObjects(elem, flattened);
+                    elem = merged;
                 } else {
+                    const obj = {};
                     obj[key] = value;
-                    result = {...result, ...obj};
-                    Object.assign(result, obj);
+                    elem = this.mergeNestedObjects(elem, obj)
                 }
             }
-
-            // Check lone attribute (nested attribute)
-            if (objectSize === 1) {
-                const latestResult = results.pop();
-                result = this.mergeNestedArrays(latestResult, result);
+            if (arraySize && arraySize === elems.length) {
+                row = range.e.r + 1;
             }
-            results.push(result);
+            if (!isEmpty(elem)) {
+                elems.push(elem);
+            }
         }
-        return results.reduce((r1, r2) => {
-            const keyR1 = Object.keys(r1);
-            const keyR2 = Object.keys(r1);
-            if (keyR1.length === 1 && keyR2.length === 1 && keyR1[0] === keyR2[0]) {
-                return this.mergeNestedArrays(r1, r2)
-            } else {
-                if (r1 instanceof Array) {
-                    return [...r1, r2];
+        return this.flattenArray(elems);
+    }
+
+    private flattenArray(array: Array<any>) {
+        if (array.length > 0) {
+            const flattened = array.reduce((r1, r2) => {
+                const keysR1 = Object.keys(r1);
+                const keysR2 = Object.keys(r2);
+                if (keysR1.length === 1 && keysR2.length === 1 && keysR1[0] === keysR2[0]) {
+                    return this.mergeNestedObjects(r1, r2)
+                } else {
+                    if (r1 instanceof Array) {
+                        return [...r1, r2];
+                    }
+                    return [r1, r2];
                 }
-                return [r1, r2];
-            }
-        });
+            });
+            return flattened;
+        } else {
+            return array;
+        }
     }
 
     private getNestedObject(nestedKeys: string[], value: any, obj: Object = {}): Object {
@@ -147,35 +193,45 @@ export class XlsxService {
 
     private mergeNestedObjects(mainObj: Object, nestedObj: Object): Object {
         for (var k in nestedObj) {
-            if (nestedObj.hasOwnProperty(k) && nestedObj[k] && (nestedObj[k] instanceof Object)) {
-                mainObj[k] = mainObj[k]
-                ? this.mergeNestedObjects(mainObj[k], nestedObj[k])
-                : nestedObj[k];
+            var mainVal = mainObj[k];
+            var nestedVal = nestedObj[k];
+            if (nestedVal && (mainVal instanceof Array)) {
+                mainObj[k] = mainVal
+                ? [...mainVal, nestedVal]
+                : nestedVal;
             }
-            else if (nestedObj.hasOwnProperty(k) && nestedObj[k]) {
-                const mainVal = mainObj[k];
-                const mergedVal = mainVal ? [mainVal, nestedObj[k]] : nestedObj[k];
-                mainObj[k] = mergedVal;
+            else if (nestedVal && (mainVal instanceof Object) && this.hasSameKeys(mainVal, nestedVal)) {
+                mainObj[k] = mainVal
+                ? [mainVal, nestedVal]
+                : nestedVal;
+            }
+            else if (nestedVal && (mainVal instanceof Object)) {
+                if(mainVal) {
+                    mainObj[k] = this.mergeNestedObjects(mainVal, nestedVal)
+                } else {
+                    mainObj[k] = nestedVal
+                }
+            }
+            else if (nestedVal && nestedVal instanceof Object) {
+                mainObj[k] = nestedVal;
+            } else if (nestedVal) {
+                mainObj[k] = nestedVal;
             }
         }
         return mainObj;
     }
 
-    private mergeNestedArrays(mainObj: Object, nestedObj: Object): Object {
-        for (var k in nestedObj) {
-            if (nestedObj.hasOwnProperty(k) && nestedObj[k] && (nestedObj[k] instanceof Object)) {
-                mainObj[k] = mainObj[k]
-                ? mainObj[k] instanceof Array
-                    ? [...mainObj[k], nestedObj[k]]
-                    : [mainObj[k], nestedObj[k]]
-                : nestedObj[k];
-            }
-            else if (nestedObj.hasOwnProperty(k) && nestedObj[k]) {
-                const mainVal = mainObj[k];
-                const mergedVal = mainVal ? [mainVal, nestedObj[k]] : nestedObj[k];
-                mainObj[k] = mergedVal;
-            }
+    private removeArrIndicator(key: string): string {
+        if (key.includes('_isArray')) {
+            return this.removeArrIndicator(key.replace('_isArray', ''));
+        } else {
+            return key
         }
-        return mainObj;
+    }
+
+    private hasSameKeys(obj1: Object, obj2: Object): boolean {
+        const keys1 = Object.keys(obj1);
+        const keys2 = Object.keys(obj2);
+        return keys1.length > 1 && keys2.length > 1 && keys1.every(k1 => keys2.indexOf(k1) > -1);
     }
 }
